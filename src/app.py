@@ -22,21 +22,29 @@ if ask and query.strip():
         result = answer_question(query)
 
     st.markdown("### Answer")
-    st.write(result["clean_answer"])
-
+    import re
+    # Remove ONLY the exact citation token pattern [CASE: <case_id>]
+    displayed_answer = re.sub(r"\[CASE:\s*[A-Za-z0-9\-]+\]", "", result["clean_answer"])
+    # Clean up stranded 'and' left over from multiple citations
+    displayed_answer = re.sub(r"\s+and\s+(?=\s|$|\.)", " ", displayed_answer)
+    displayed_answer = displayed_answer.replace("  ", " ").strip()
+    
+    st.write(displayed_answer)
     st.markdown("---")
-    badge = "✅" if not result["unverified"] else "⚠️"
-    st.markdown(f"**{badge} Citation check:** {result['accuracy_note']}")
-
+    
     if result["verified"]:
-        st.markdown("**Verified citations:**")
+        st.markdown("### Sources")
         for c in result["verified"]:
-            st.markdown(f"- {c['title']} — {c['court']}, {c['date']} (`{c['case_id']}`)")
+            date_val = c.get('date', 'Unknown Date')
+            st.markdown(f"**✓ {c['title']}**\n\n&nbsp;&nbsp;&nbsp;&nbsp;{c['court']} — {date_val}")
 
     if result["unverified"]:
-        st.markdown("**⚠️ Unverified citations (not found in local database):**")
+        st.markdown("### ⚠️ Unverified citations")
         for cid in result["unverified"]:
-            st.markdown(f"- `{cid}`")
+            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{cid}")
+
+    badge = "🟢" if not result["unverified"] else "🔴"
+    st.markdown(f"**{badge} Citation check:** {result['accuracy_note']}")
 
     with st.expander("Retrieved chunks used for this answer"):
         for rc in result["retrieved_cases"]:

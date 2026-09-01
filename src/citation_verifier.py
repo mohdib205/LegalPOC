@@ -38,10 +38,8 @@ def verify_citations(answer_text: str, validated_ids: set = None):
                 "case_id": case_id, "title": case["title"],
                 "court": case["court"], "date": case["date"],
             })
-            clean_answer = re.sub(rf"\[(?:CASE:\s*)?{re.escape(case_id)}\]", f"[{label}]", clean_answer)
         else:
             unverified.append(case_id)
-            clean_answer = re.sub(rf"\[(?:CASE:\s*)?{re.escape(case_id)}\]", f"[s UNVERIFIED CITATION: {case_id}]", clean_answer)
 
     return {
         "verified": verified,
