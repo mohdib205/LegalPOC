@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+venv/
+
+# Development / Testing / Evaluation folders (Local Historical Only)
+tools/
+evaluation/
+archive/
+
+# Temporary / OS files
+.DS_Store
+*.bak
