@@ -9,6 +9,11 @@ from search import hybrid_search
 from citation_verifier import verify_citations, extract_citations
 import re
 import json
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+USE_GROQ = os.environ.get("USE_GROQ", "false").lower() == "true"
 
 MODEL_NAME = "llama3.1:8b"
 
@@ -91,8 +96,36 @@ def build_context(hits):
     return "\\n\\n".join(blocks)
 
 def _call_model(messages):
-    response = ollama.chat(model=MODEL_NAME, messages=messages, options=GEN_OPTIONS, format="json")
-    return response["message"]["content"]
+    if USE_GROQ:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("Configuration Error: USE_GROQ is true but GROQ_API_KEY is not set.")
+        
+        from groq import Groq
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=messages,
+            temperature=0.0,
+            seed=42,
+            max_tokens=4096
+            # Removed response_format={"type": "json_object"} to prevent 400 error on reasoning tags
+        )
+        raw_output = response.choices[0].message.content
+        
+        # Remove <think>...</think> explicitly first to avoid `{` inside thinking block
+        import re
+        raw_output = re.sub(r'<think>.*?</think>', '', raw_output, flags=re.DOTALL).strip()
+        
+        start_idx = raw_output.find('{')
+        end_idx = raw_output.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            return raw_output[start_idx:end_idx+1]
+        
+        return raw_output
+    else:
+        response = ollama.chat(model=MODEL_NAME, messages=messages, options=GEN_OPTIONS, format="json")
+        return response["message"]["content"]
 
 def normalize_text(text: str) -> str:
     if not text: return ""

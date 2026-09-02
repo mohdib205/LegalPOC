@@ -19,7 +19,9 @@ ask = st.button("Ask", type="primary")
 
 if ask and query.strip():
     with st.spinner("Retrieving relevant judgments and generating answer..."):
+        print(query)
         result = answer_question(query)
+        print(result)
 
     st.markdown("### Answer")
     import re
