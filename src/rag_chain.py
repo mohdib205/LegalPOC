@@ -1,24 +1,25 @@
 """
-RAG Pipeline ?" Integrates ChromaDB retrieval with Ollama inference.
-To use:
+RAG Chain ?\" orchestrates retrieval and LLM generation.
+Dependencies:
+    pip install ollama
     ollama run llama3.1:8b
     ollama pull llama3.1:8b
 """
 import ollama
+import json
+import re
+import os
+import instrumentation
+
 from search import hybrid_search
 from citation_verifier import verify_citations, extract_citations
-import re
-import json
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-USE_GROQ = os.environ.get("USE_GROQ", "false").lower() == "true"
 
 MODEL_NAME = "llama3.1:8b"
 
-SYSTEM_PROMPT = """You are a legal research assistant for Indian law. You answer ONLY \\
-using the case excerpts provided below. Do not use any outside knowledge or cases you \\
+USE_GROQ = os.environ.get("USE_GROQ", "false").lower() == "true"
+
+SYSTEM_PROMPT = """You are a legal research assistant for Indian law. You answer ONLY \
+using the case excerpts provided below. Do not use any outside knowledge or cases you \
 recall from training.
 
 CRITICAL RULES:
@@ -29,19 +30,13 @@ CRITICAL RULES:
 5. Distinguish between facts/reasoning directly present in the excerpts and broader legal conclusions. Do not invent broader legal conclusions.
 
 Your answer MUST ALWAYS begin with a natural-language sentence directly addressing the question.
-NEVER begin your answer with a citation.
-Case IDs (like NI138-12345) are citation tokens ONLY. NEVER use them as ordinary nouns in your prose.
-
-For every specific claim about a case's facts, reasoning, or holding, complete the relevant legal statement first, then place the citation at the very end of that sentence or proposition.
-Use this EXACT format: [CASE: <case_id>]
-Use the case_id given with each excerpt below, exactly as written.
-
-
+DO NOT EMBED CITATION TOKENS (like [CASE: xxx]) in your answer text. 
+Provide citations ONLY in the separate citations array.
 
 OUTPUT FORMAT:
 You MUST respond with a valid JSON object matching exactly this structure:
 {
-  "answer": "Your natural-language answer, including [CASE: <case_id>] citations properly placed.",
+  "answer": "Your natural-language answer without any citation tokens.",
   "citations": [
     {
       "case_id": "The ID of the cited case",
@@ -51,21 +46,18 @@ You MUST respond with a valid JSON object matching exactly this structure:
 }
 """
 
-CITATION_REMINDER = """Your last answer did not include any [CASE: <case_id>] citations properly placed at the ends of sentences. \\
-Rewrite your answer as a JSON object, following the same schema, and ensure you include citations at the end of claims supported by the excerpts."""
-
 def fix_leading_citation(text: str) -> str:
     text = text.strip()
-    match = re.match(r'^(\\[CASE:\\s*[^\]]+\\]|\\[[A-Za-z0-9\\-]+\\])\\s*(.*)', text, flags=re.IGNORECASE | re.DOTALL)
+    match = re.match(r'^(\\[CASE:\s*[^\]]+\\]|\\[[A-Za-z0-9\-]+\\])\s*(.*)', text, flags=re.IGNORECASE | re.DOTALL)
     if match:
         citation = match.group(1).strip()
         remainder = match.group(2).strip()
         
-        id_match = re.search(r'([A-Za-z0-9\\-]+)', citation.replace("CASE:", "", 1))
+        id_match = re.search(r'([A-Za-z0-9\-]+)', citation.replace("CASE:", "", 1))
         case_id = id_match.group(1) if id_match else citation
         
         if case_id not in remainder:
-            sentence_end = re.search(r'([.?!])(?:\\s|$)', remainder)
+            sentence_end = re.search(r'([.?!])(?:\s|$)', remainder)
             if sentence_end:
                 idx = sentence_end.start(1) + 1
                 remainder = remainder[:idx] + " " + citation + remainder[idx:]
@@ -85,52 +77,132 @@ GEN_OPTIONS = {
 }
 
 def build_context(hits):
+    instrumentation.log("8", "Context construction START")
+    instrumentation.start("Context construction")
     blocks = []
     for h in hits:
         if not h["text"]:
             continue
         blocks.append(
             f"--- case_id: {h['case_id']} | {h['title']} ({h['court']}, {h['date']}) "
-            f"| section: {h['section']} ---\\n{h['text']}"
+            f"| section: {h['section']} ---\n{h['text']}"
         )
-    return "\\n\\n".join(blocks)
+    result = "\n\n".join(blocks)
+    dur = instrumentation.end("Context construction")
+    instrumentation.log("8", f"Context construction END: {dur:.3f} sec")
+    instrumentation.log("8", f"Context length: {len(result)} characters")
+    return result
 
 def _call_model(messages):
+    call_num = instrumentation.increment_api_call()
+    
+    raw_use_groq = os.environ.get("USE_GROQ", "not set")
+    instrumentation.log("MODEL CONFIG", f"USE_GROQ raw value: {raw_use_groq}")
+    instrumentation.log("MODEL CONFIG", f"USE_GROQ type: {type(raw_use_groq)}")
+    instrumentation.log("MODEL CONFIG", f"USE_GROQ = {USE_GROQ}")
+    
+    backend = "GROQ" if USE_GROQ else "OLLAMA"
+    model_name = "qwen/qwen3.6-27b" if USE_GROQ else MODEL_NAME
+    instrumentation.log("MODEL CONFIG", f"Selected backend = {backend}")
+    instrumentation.log("MODEL CONFIG", f"Model = {model_name}")
+    
+    instrumentation.set_config("Selected backend", backend)
+    instrumentation.set_config("Model", model_name)
+    instrumentation.set_config("USE_GROQ", str(USE_GROQ))
+
+    instrumentation.start("Total model time")
+    
     if USE_GROQ:
+        instrumentation.log("GROQ", "ENTER _call_model")
+        instrumentation.start("Model initialization")
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise ValueError("Configuration Error: USE_GROQ is true but GROQ_API_KEY is not set.")
         
         from groq import Groq
         client = Groq(api_key=api_key)
+        instrumentation.end("Model initialization")
+        
+        instrumentation.log("GROQ", "API CALL START")
+        instrumentation.start("Actual API call")
         response = client.chat.completions.create(
-            model="openai/gpt-oss-20b",
+            model="qwen/qwen3.6-27b",
             messages=messages,
             temperature=0.0,
             seed=42,
-            max_tokens=4096
-            # Removed response_format={"type": "json_object"} to prevent 400 error on reasoning tags
+            max_tokens=1500,
+            response_format={"type": "json_object"},
+            extra_body={"reasoning_effort": "none"}
         )
+        dur = instrumentation.end("Actual API call")
+        instrumentation.log("GROQ", f"API CALL END: {dur:.3f} sec")
+        
+        instrumentation.start("Model response processing")
+        instrumentation.log("GROQ", "Response received")
         raw_output = response.choices[0].message.content
-        
-        # Remove <think>...</think> explicitly first to avoid `{` inside thinking block
-        import re
         raw_output = re.sub(r'<think>.*?</think>', '', raw_output, flags=re.DOTALL).strip()
+        instrumentation.end("Model response processing")
         
+        instrumentation.log("GROQ", "EXIT _call_model")
+        instrumentation.end("Total model time")
+        
+        instrumentation.log("12", "JSON extraction START")
+        instrumentation.start("JSON extraction")
         start_idx = raw_output.find('{')
         end_idx = raw_output.rfind('}')
         if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
-            return raw_output[start_idx:end_idx+1]
-        
-        return raw_output
+            extracted = raw_output[start_idx:end_idx+1]
+        else:
+            extracted = raw_output
+        dur_ex = instrumentation.end("JSON extraction")
+        instrumentation.log("12", f"JSON extraction END: {dur_ex:.3f} sec")
+        return extracted
     else:
+        instrumentation.log("OLLAMA", "ENTER _call_model")
+        instrumentation.start("Model initialization")
+        # Ollama initializes its client internally per request in the module
+        instrumentation.end("Model initialization")
+        
+        instrumentation.log("OLLAMA", "API CALL START")
+        instrumentation.start("Actual API call")
         response = ollama.chat(model=MODEL_NAME, messages=messages, options=GEN_OPTIONS, format="json")
-        return response["message"]["content"]
+        dur = instrumentation.end("Actual API call")
+        instrumentation.log("OLLAMA", f"API CALL END: {dur:.3f} sec")
+        
+        # New diagnostic logs for Ollama metrics
+        if "total_duration" in response:
+            instrumentation.log("OLLAMA_METRICS", f"load_duration: {response.get('load_duration', 0) / 1e9:.3f} sec")
+            instrumentation.log("OLLAMA_METRICS", f"prompt_eval_duration: {response.get('prompt_eval_duration', 0) / 1e9:.3f} sec")
+            instrumentation.log("OLLAMA_METRICS", f"prompt_eval_count: {response.get('prompt_eval_count', 0)}")
+            instrumentation.log("OLLAMA_METRICS", f"eval_duration: {response.get('eval_duration', 0) / 1e9:.3f} sec")
+            instrumentation.log("OLLAMA_METRICS", f"eval_count: {response.get('eval_count', 0)}")
+            instrumentation.log("OLLAMA_METRICS", f"total_duration: {response.get('total_duration', 0) / 1e9:.3f} sec")
+        
+        extracted = response.get("message", {}).get("content", "")
+        instrumentation.log("OLLAMA_PAYLOAD", f"Raw response: {extracted}")
+        
+        instrumentation.start("Model response processing")
+        instrumentation.log("OLLAMA", "Response received")
+        instrumentation.end("Model response processing")
+        
+        instrumentation.log("OLLAMA", "EXIT _call_model")
+        instrumentation.end("Total model time")
+        
+        instrumentation.log("12", "JSON extraction START")
+        instrumentation.start("JSON extraction")
+        start_idx = extracted.find('{')
+        end_idx = extracted.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            extracted = extracted[start_idx:end_idx+1]
+        dur_ex = instrumentation.end("JSON extraction")
+        instrumentation.log("12", f"JSON extraction END: {dur_ex:.3f} sec")
+        
+        return extracted
 
 def normalize_text(text: str) -> str:
     if not text: return ""
-    text = re.sub(r'[^\\w\\s]', '', text)
-    return re.sub(r'\\s+', ' ', text).lower().strip()
+    text = re.sub(r'[^\w\s]', '', text)
+    return re.sub(r'\s+', ' ', text).lower().strip()
 
 def answer_question(question: str, top_k: int = 5):
     hits = hybrid_search(question, top_k=top_k)
@@ -146,13 +218,20 @@ def answer_question(question: str, top_k: int = 5):
             "retrieved_cases": [],
         }
 
-    user_content = f"Excerpts:\\n{context}\\n\\nQuestion: {question}"
+    instrumentation.log("9", "Prompt construction START")
+    instrumentation.start("Prompt construction")
+    user_content = f"Excerpts:\n{context}\n\nQuestion: {question}"
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
+    dur_prompt = instrumentation.end("Prompt construction")
+    instrumentation.log("9", f"Prompt construction END: {dur_prompt:.3f} sec")
 
     raw_answer_json = _call_model(messages)
+    
+    instrumentation.log("12", "JSON parsing START")
+    instrumentation.start("JSON parsing")
     try:
         parsed = json.loads(raw_answer_json)
         raw_answer = parsed.get("answer", raw_answer_json)
@@ -160,25 +239,23 @@ def answer_question(question: str, top_k: int = 5):
     except json.JSONDecodeError:
         raw_answer = raw_answer_json
         evidence_list = []
+    dur_parse = instrumentation.end("JSON parsing")
+    instrumentation.log("12", f"JSON parsing END: {dur_parse:.3f} sec")
         
+    instrumentation.start("Fix leading citation")
     raw_answer = fix_leading_citation(raw_answer)
+    dur_fix = instrumentation.end("Fix leading citation")
+    instrumentation.log("12", f"Fix leading citation END: {dur_fix:.3f} sec")
 
-    if not extract_citations(raw_answer):
-        messages.append({"role": "assistant", "content": raw_answer_json})
-        messages.append({"role": "user", "content": CITATION_REMINDER})
-        raw_answer_json = _call_model(messages)
-        try:
-            parsed = json.loads(raw_answer_json)
-            raw_answer = parsed.get("answer", raw_answer_json)
-            evidence_list = parsed.get("citations", [])
-        except json.JSONDecodeError:
-            raw_answer = raw_answer_json
-            evidence_list = []
-        raw_answer = fix_leading_citation(raw_answer)
-
+    instrumentation.log("15", "Final answer processing START")
+    instrumentation.start("Final processing")
+    
     hit_dict = {h['case_id']: h['text'] for h in hits if h['text']}
     
     validated_ids = set()
+    appended_citations = []
+    
+    instrumentation.start("Evidence reference extraction")
     if evidence_list and isinstance(evidence_list, list):
         for cit in evidence_list:
             if not isinstance(cit, dict): continue
@@ -189,11 +266,24 @@ def answer_question(question: str, top_k: int = 5):
                 norm_t = normalize_text(hit_dict[cid])
                 if norm_q and norm_q in norm_t:
                     validated_ids.add(cid)
+                    appended_citations.append(f"[CASE: {cid}]")
+    dur_ev = instrumentation.end("Evidence reference extraction")
+    instrumentation.log("15", f"Evidence extraction END: {dur_ev:.3f} sec")
+    
+    instrumentation.start("Python citation mapping")
+    if appended_citations:
+        raw_answer = raw_answer.strip() + " " + " ".join(appended_citations)
+    dur_map = instrumentation.end("Python citation mapping")
+    instrumentation.log("15", f"Python citation mapping END: {dur_map:.3f} sec")
+
+    dur_fp = instrumentation.end("Final processing")
+    instrumentation.log("15", f"Final answer processing END: {dur_fp:.3f} sec")
 
     verification = verify_citations(raw_answer, validated_ids)
 
     return {
         "raw_answer": raw_answer,
+        "clean_answer": verification.get("clean_answer", raw_answer),
         "retrieved_cases": [
             {"case_id": h["case_id"], "title": h["title"], "source": h["source"]}
             for h in hits
@@ -205,7 +295,7 @@ if __name__ == "__main__":
     q = "If a demand notice is returned undelivered, is the complaint still valid under Section 138?"
     result = answer_question(q)
     print("QUESTION:", q)
-    print("\\nANSWER:\\n", result["clean_answer"])
-    print("\\n", result["accuracy_note"])
+    print("\nANSWER:\n", result["clean_answer"])
+    print("\n", result["accuracy_note"])
     if result["unverified"]:
         print("UNVERIFIED:", result["unverified"])

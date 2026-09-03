@@ -1,7 +1,11 @@
 """NyayaSetu MVP UI. Run with: streamlit run app.py"""
+from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 from rag_chain import answer_question
 from db import get_connection
+import instrumentation
 
 st.set_page_config(page_title="NyayaSetu MVP", page_icon="⚖️", layout="centered")
 
@@ -18,11 +22,26 @@ query = st.text_area("Ask a legal question:", height=100,
 ask = st.button("Ask", type="primary")
 
 if ask and query.strip():
+    instrumentation.reset()
+    instrumentation.start("Total end-to-end")
+    instrumentation.log("1", "REQUEST START")
+    instrumentation.log("1", f"Question received: {query}")
+    
     with st.spinner("Retrieving relevant judgments and generating answer..."):
-        print(query)
+        instrumentation.log("2", "Calling answer_question()")
+        instrumentation.start("answer_question")
         result = answer_question(query)
-        print(result)
+        dur_aq = instrumentation.end("answer_question")
+        instrumentation.log("2", "answer_question() returned")
+        instrumentation.log("2", f"Duration: {dur_aq:.3f} sec")
+        
+        instrumentation.log("16", f"answer_question TOTAL: {dur_aq:.3f} sec")
+        instrumentation.log("16", f"API calls made: {instrumentation.api_calls}")
+        instrumentation.log("16", "REQUEST END")
 
+    instrumentation.log("17", "Streamlit rendering START")
+    instrumentation.start("Streamlit rendering")
+    
     st.markdown("### Answer")
     import re
     # Remove ONLY the exact citation token pattern [CASE: <case_id>]
@@ -52,6 +71,12 @@ if ask and query.strip():
         for rc in result["retrieved_cases"]:
             st.markdown(f"- {rc['title']} (`{rc['case_id']}`) — via {rc['source']} search")
 
+    dur_rend = instrumentation.end("Streamlit rendering")
+    instrumentation.log("17", f"Streamlit rendering END: {dur_rend:.3f} sec")
+    instrumentation.end("Total end-to-end")
+    instrumentation.print_summary()
+    instrumentation.print_model_summary()
+    
     st.markdown("---")
     fcol1, fcol2 = st.columns(2)
     if fcol1.button("👍 Good answer"):
