@@ -2,16 +2,43 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
 
 # Environments
 .env
 venv/
+.venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.spyderproject
+.ropeproject
+
+# OS / temporary files
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+*.temp
+*~
+
+# Logs
+*.log
+logs/
+
+# Model caching
+.huggingface/
 
 # Development / Testing / Evaluation folders (Local Historical Only)
 tools/
 evaluation/
 archive/
 
-# Temporary / OS files
-.DS_Store
-*.bak
+# Ignored AI Benchmarks
+docs/benchmarks/
+docs/benchmark/

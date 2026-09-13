@@ -250,7 +250,11 @@ def answer_question(question: str, top_k: int = 5):
     instrumentation.log("15", "Final answer processing START")
     instrumentation.start("Final processing")
     
-    hit_dict = {h['case_id']: h['text'] for h in hits if h['text']}
+    # We ignore the LLM's generated case_id and use authoritative metadata from chunks
+    hit_list = [
+        {"norm_text": normalize_text(h['text']), "authoritative_case_id": h['case_id']} 
+        for h in hits if h['text']
+    ]
     
     validated_ids = set()
     appended_citations = []
@@ -259,14 +263,25 @@ def answer_question(question: str, top_k: int = 5):
     if evidence_list and isinstance(evidence_list, list):
         for cit in evidence_list:
             if not isinstance(cit, dict): continue
-            cid = cit.get("case_id")
+            
+            # The LLM's case_id is untrusted; we map using the quote alone
             quote = cit.get("evidence_quote", "")
-            if cid in hit_dict and quote:
+            if quote:
                 norm_q = normalize_text(quote)
-                norm_t = normalize_text(hit_dict[cid])
-                if norm_q and norm_q in norm_t:
-                    validated_ids.add(cid)
-                    appended_citations.append(f"[CASE: {cid}]")
+                if not norm_q: continue
+                
+                authoritative_cid = None
+                for h in hit_list:
+                    if norm_q in h["norm_text"]:
+                        authoritative_cid = h["authoritative_case_id"]
+                        break
+                
+                if authoritative_cid:
+                    validated_ids.add(authoritative_cid)
+                    # keep order but ensure uniqueness
+                    cit_str = f"[CASE: {authoritative_cid}]"
+                    if cit_str not in appended_citations:
+                        appended_citations.append(cit_str)
     dur_ev = instrumentation.end("Evidence reference extraction")
     instrumentation.log("15", f"Evidence extraction END: {dur_ev:.3f} sec")
     

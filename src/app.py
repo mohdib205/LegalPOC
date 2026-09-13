@@ -1,4 +1,4 @@
-"""NyayaSetu MVP UI. Run with: streamlit run app.py"""
+"""NyayaSetu POC UI. Run with: streamlit run app.py"""
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -7,11 +7,18 @@ from rag_chain import answer_question
 from db import get_connection
 import instrumentation
 
-st.set_page_config(page_title="NyayaSetu MVP", page_icon="⚖️", layout="centered")
+st.set_page_config(page_title="NyayaSetu POC", page_icon="⚖️", layout="centered")
 
-st.title("⚖️ NyayaSetu — Offline Legal Research (MVP)")
+st.markdown("""
+<style>
+    .block-container { padding-top: 2rem; padding-bottom: 2rem; }
+    div.stButton > button { border-radius: 6px; font-weight: 500; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("⚖️ NyayaSetu – Legal Research (POC)")
 st.caption("Domain: Section 138 Negotiable Instruments Act (cheque bounce) cases. "
-           "Runs entirely locally — no cloud, no API costs.")
+           "Runs locally or via optimized cloud acceleration.")
 st.info("Citations shown as 'Verified' are checked against this app's local database "
         "of curated judgments — not all of Indian case law. 'Unverified' may mean the "
         "citation was fabricated, or it may be a real case outside this small sample.")
