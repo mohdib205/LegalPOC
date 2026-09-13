@@ -1,0 +1,7 @@
+[theme]
+base = "light"
+primaryColor = "#1e3a8a" # Deep professional blue
+backgroundColor = "#f8fafc" # Clean slate background
+secondaryBackgroundColor = "#ffffff" # White for elements
+textColor = "#0f172a" # Slate dark for readability
+font = "sans serif"

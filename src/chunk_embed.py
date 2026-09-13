@@ -80,12 +80,13 @@ def build_index():
         for i, (label, chunk_text) in enumerate(final_sections):
             if not chunk_text.strip():
                 continue
-            ids.append(f"{case['case_id']}_chunk{i}")
+            chunk_id_str = f"{case['case_id']}_chunk{i}"
+            ids.append(chunk_id_str)
             documents.append(chunk_text)
             metadatas.append({
                 "case_id": case["case_id"], "title": case["title"],
                 "court": case["court"] or "", "date": case["date"] or "",
-                "section": label or "general",
+                "section": label or "general", "chunk_id": chunk_id_str,
             })
 
     if ids:

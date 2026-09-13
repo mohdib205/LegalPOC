@@ -16,16 +16,18 @@ This Proof of Concept (POC) focuses strictly on **Section 138 of the Negotiable 
 - **Python**
 - **SQLite** (Storage & Keyword Search)
 - **ChromaDB** (Vector Search)
-- **Ollama** (Local LLM Execution - Phi-3 Mini / Llama 3.1)
+- **Groq API** (Primary Fast Inference - Qwen 27B)
+- **Ollama** (Local Fallback LLM - Llama 3.1)
 - **Streamlit** (Web UI)
 - **sentence-transformers** (Embeddings)
 
 ## Simple Request Lifecycle
 1. **Question**: User asks a legal question in the UI.
 2. **Hybrid Search**: System searches both ChromaDB (meaning) and SQLite (exact keywords).
-3. **Local LLM**: An offline model writes an answer using only the searched cases, embedding `[CASE: id]` tags.
-4. **Citation Verifier**: The system checks the tags against SQLite.
-5. **Answer**: User sees the final answer with verified/unverified markers.
+3. **LLM Generation**: Groq (or local Ollama) generates a JSON response with natural language answer and evidence quotes.
+4. **Deterministic Mapping**: Python maps the generated quotes to the retrieved chunks to securely extract the `[CASE: id]`.
+5. **Citation Verifier**: The system verifies the extracted tags against SQLite.
+6. **Answer**: User sees the final answer with verified/unverified markers.
 
 ## Simple Project Structure
 - `data/`: Raw judgment JSONs.

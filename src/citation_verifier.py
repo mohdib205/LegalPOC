@@ -5,10 +5,13 @@ and never presents an unverified citation as fact.
 """
 import re
 from db import case_exists, get_case
+import instrumentation
 
 CITATION_PATTERN = re.compile(r"\[(?:CASE:\s*)?(NI138(?:-\d+)+)\]")
 
 def extract_citations(answer_text: str):
+    instrumentation.log("13", "Citation extraction START")
+    instrumentation.start("Citation extraction")
     matches = CITATION_PATTERN.findall(answer_text)
     seen = set()
     ordered = []
@@ -16,9 +19,14 @@ def extract_citations(answer_text: str):
         if m not in seen:
             seen.add(m)
             ordered.append(m)
+    dur = instrumentation.end("Citation extraction")
+    instrumentation.log("13", f"Citation extraction END: {dur:.3f} sec")
+    instrumentation.log("13", f"Citations extracted: {len(ordered)}")
     return ordered
 
 def verify_citations(answer_text: str, validated_ids: set = None):
+    instrumentation.log("14", "Citation verification START")
+    instrumentation.start("Citation verification")
     claimed = extract_citations(answer_text)
     verified = []
     unverified = []
@@ -38,10 +46,13 @@ def verify_citations(answer_text: str, validated_ids: set = None):
                 "case_id": case_id, "title": case["title"],
                 "court": case["court"], "date": case["date"],
             })
-            clean_answer = re.sub(rf"\[(?:CASE:\s*)?{re.escape(case_id)}\]", f"[{label}]", clean_answer)
         else:
             unverified.append(case_id)
-            clean_answer = re.sub(rf"\[(?:CASE:\s*)?{re.escape(case_id)}\]", f"[s UNVERIFIED CITATION: {case_id}]", clean_answer)
+
+    dur = instrumentation.end("Citation verification")
+    instrumentation.log("14", f"Citation verification END: {dur:.3f} sec")
+    instrumentation.log("14", f"Verified citations: {len(verified)}")
+    instrumentation.log("14", f"Unverified citations: {len(unverified)}")
 
     return {
         "verified": verified,
